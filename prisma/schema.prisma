@@ -1,0 +1,412 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==========================================
+// 1. UTILISATEURS ADMIN (PROF & STAFF) & SÉCURITÉ
+// ==========================================
+
+enum AdminRole {
+  PROF
+  STAFF
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  nom          String
+  prenom       String
+  passwordHash String
+  role         AdminRole
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid())
+  tokenHash    String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  createdAt    DateTime  @default(now())
+
+  adminUserId   String?
+  adminUser     AdminUser?   @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  inscriptionId String?
+  inscription   Inscription? @relation(fields: [inscriptionId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id          String     @id @default(uuid())
+  action      String
+  entityType  String
+  entityId    String?
+  details     Json?
+  ipAddress   String?
+  createdAt   DateTime   @default(now())
+
+  adminUserId String?
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+}
+
+// ==========================================
+// 2. ANNÉES ACADÉMIQUES, CLASSES, SALLES & COURS
+// ==========================================
+
+model AnneeAcademique {
+  id        String    @id @default(uuid())
+  libelle   String    @unique
+  isActive  Boolean   @default(true)
+  isClosed  Boolean   @default(false)
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  classes      Classe[]
+  inscriptions Inscription[]
+  communiques  Communique[]
+}
+
+model Classe {
+  id                String          @id @default(uuid())
+  nom               String
+  code              String
+  anneeAcademiqueId String
+  anneeAcademique   AnneeAcademique @relation(fields: [anneeAcademiqueId], references: [id])
+  createdAt         DateTime        @default(now())
+
+  cours        Cours[]
+  inscriptions Inscription[]
+  communiques  Communique[]
+
+  @@unique([code, anneeAcademiqueId])
+}
+
+model Salle {
+  id        String    @id @default(uuid())
+  nom       String    @unique
+  capacite  Int?
+  createdAt DateTime  @default(now())
+
+  horaires  Horaire[]
+}
+
+model Cours {
+  id            String   @id @default(uuid())
+  titre         String
+  code          String
+  description   String?
+  volumeHoraire Int      @default(0)
+  isActive      Boolean  @default(false)
+  classeId      String
+  classe        Classe   @relation(fields: [classeId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  horaires     Horaire[]
+  seances      SeanceCours[]
+  evaluations  Evaluation[]
+  tps          TravauxPratiques[]
+  quizzes      Quiz[]
+  supports     SupportCours[]
+  programmes   ProgrammeItem[]
+}
+
+model Horaire {
+  id          String   @id @default(uuid())
+  jourSemaine Int
+  heureDebut  String
+  heureFin    String
+  coursId     String
+  cours       Cours    @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  salleId     String
+  salle       Salle    @relation(fields: [salleId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==========================================
+// 3. ÉTUDIANTS & INSCRIPTIONS ANNUELLES
+// ==========================================
+
+enum StatutInscription {
+  EN_ATTENTE
+  VALIDEE
+  REJETEE
+  BLOQUEE
+}
+
+model Etudiant {
+  id          String    @id @default(uuid())
+  matricule   String    @unique
+  nom         String
+  postNom     String
+  prenom      String
+  email       String    @unique
+  telephone   String
+  rgpdConsent Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  inscriptions Inscription[]
+}
+
+model Inscription {
+  id                 String            @id @default(uuid())
+  etudiantId         String
+  etudiant           Etudiant          @relation(fields: [etudiantId], references: [id])
+  anneeAcademiqueId  String
+  anneeAcademique    AnneeAcademique   @relation(fields: [anneeAcademiqueId], references: [id])
+  classeId           String
+  classe             Classe            @relation(fields: [classeId], references: [id])
+  statut             StatutInscription @default(EN_ATTENTE)
+  passwordHash       String?
+  mustChangePassword Boolean           @default(true)
+  lastLoginAt        DateTime?
+  loginCount         Int               @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  refreshTokens     RefreshToken[]
+  presences         Presence[]
+  cotes             Cote[]
+  soumissionsTP     SoumissionTP[]
+  resultatsQuiz     ResultatQuiz[]
+  messagesPrives    MessagePrive[]
+  notifications     Notification[]
+  pushSubscriptions PushSubscription[]
+
+  @@unique([etudiantId, anneeAcademiqueId])
+}
+
+// ==========================================
+// 4. PRÉSENCES, ÉVALUATIONS & COTES ÉPHÉMÈRES
+// ==========================================
+
+enum StatutPresence {
+  PRESENT
+  RETARD
+  ABSENT
+  JUSTIFIE
+}
+
+model SeanceCours {
+  id        String   @id @default(uuid())
+  date      DateTime
+  sujet     String?
+  coursId   String
+  cours     Cours    @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  presences Presence[]
+}
+
+model Presence {
+  id            String         @id @default(uuid())
+  statut        StatutPresence
+  seanceId      String
+  seance        SeanceCours    @relation(fields: [seanceId], references: [id], onDelete: Cascade)
+  inscriptionId String
+  inscription   Inscription    @relation(fields: [inscriptionId], references: [id])
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([seanceId, inscriptionId])
+}
+
+model Evaluation {
+  id           String    @id @default(uuid())
+  titre        String
+  maxPoints    Float     @default(20)
+  isPublished  Boolean   @default(false)
+  visibleFrom  DateTime?
+  visibleUntil DateTime?
+  coursId      String
+  cours        Cours     @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  cotes        Cote[]
+}
+
+model Cote {
+  id            String      @id @default(uuid())
+  valeur        Float
+  commentaire   String?
+  evaluationId  String
+  evaluation    Evaluation  @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  inscriptionId String
+  inscription   Inscription @relation(fields: [inscriptionId], references: [id])
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([evaluationId, inscriptionId])
+}
+
+// ==========================================
+// 5. MODULES PÉDAGOGIQUES (TP, QUIZ, SUPPORTS, PROGRAMME/LABO)
+// ==========================================
+
+enum StatutTP {
+  PUBLIE
+  EN_COURS
+  CORRIGE
+  COTE_DISPONIBLE
+}
+
+model TravauxPratiques {
+  id          String   @id @default(uuid())
+  titre       String
+  consignes   String
+  dateLimite  DateTime
+  coursId     String
+  cours       Cours    @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  soumissions SoumissionTP[]
+}
+
+model SoumissionTP {
+  id            String           @id @default(uuid())
+  fichierUrl    String
+  statut        StatutTP         @default(EN_COURS)
+  note          Float?
+  visibleUntil  DateTime?
+  tpId          String
+  tp            TravauxPratiques @relation(fields: [tpId], references: [id], onDelete: Cascade)
+  inscriptionId String
+  inscription   Inscription      @relation(fields: [inscriptionId], references: [id])
+  submittedAt   DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([tpId, inscriptionId])
+}
+
+model Quiz {
+  id        String         @id @default(uuid())
+  titre     String
+  questions Json
+  isActive  Boolean        @default(true)
+  coursId   String
+  cours     Cours          @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  resultats ResultatQuiz[]
+}
+
+model ResultatQuiz {
+  id            String      @id @default(uuid())
+  score         Float
+  maxScore      Float
+  quizId        String
+  quiz          Quiz        @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  inscriptionId String
+  inscription   Inscription @relation(fields: [inscriptionId], references: [id])
+  completedAt   DateTime    @default(now())
+
+  @@unique([quizId, inscriptionId])
+}
+
+enum TypeSupport {
+  SUPPORT_COURS
+  EXERCICE_NON_RESOLU
+  EXERCICE_RESOLU
+}
+
+model SupportCours {
+  id         String      @id @default(uuid())
+  titre      String
+  type       TypeSupport
+  fichierUrl String
+  coursId    String
+  cours      Cours       @relation(fields: [coursId], references: [id], onDelete: Cascade)
+  createdAt  DateTime    @default(now())
+}
+
+enum TypeProgramme {
+  PROGRAMME_THEORIQUE
+  LABO_MANIPULATION
+}
+
+model ProgrammeItem {
+  id            String        @id @default(uuid())
+  titre         String
+  type          TypeProgramme
+  heuresPrevues Float         @default(0)
+  heuresFaites  Float         @default(0)
+  estTermine    Boolean       @default(false)
+  coursId       String
+  cours         Cours         @relation(fields: [coursId], references: [id], onDelete: Cascade)
+}
+
+// ==========================================
+// 6. COMMUNICATION, NOTIFICATIONS & SYNC OFFLINE
+// ==========================================
+
+model Communique {
+  id                String          @id @default(uuid())
+  titre             String
+  contenu           String
+  anneeAcademiqueId String
+  anneeAcademique   AnneeAcademique @relation(fields: [anneeAcademiqueId], references: [id])
+  classeId          String?
+  classe            Classe?         @relation(fields: [classeId], references: [id])
+  createdAt         DateTime        @default(now())
+}
+
+enum TypeFilMessage {
+  INDIVIDUEL
+  SUPPORT
+}
+
+model MessagePrive {
+  id                 String         @id @default(uuid())
+  typeFil            TypeFilMessage
+  sujet              String?
+  contenu            String
+  expediteurEstAdmin Boolean        @default(false)
+  lu                 Boolean        @default(false)
+  inscriptionId      String
+  inscription        Inscription    @relation(fields: [inscriptionId], references: [id])
+  createdAt          DateTime       @default(now())
+}
+
+model Notification {
+  id            String      @id @default(uuid())
+  titre         String
+  message       String
+  lien          String?
+  estLue        Boolean     @default(false)
+  inscriptionId String
+  inscription   Inscription @relation(fields: [inscriptionId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+}
+
+model PushSubscription {
+  id            String      @id @default(uuid())
+  endpoint      String      @unique
+  p256dh        String
+  auth          String
+  inscriptionId String
+  inscription   Inscription @relation(fields: [inscriptionId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+}
+
+model SyncMutationLog {
+  id               String   @id @default(uuid())
+  clientMutationId String   @unique
+  actionType       String
+  inscriptionId    String
+  processedAt      DateTime @default(now())
+}
