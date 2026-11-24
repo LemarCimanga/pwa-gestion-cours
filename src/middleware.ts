@@ -5,9 +5,20 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const accessToken = request.cookies.get('access_token')?.value
 
-  // ==========================================
-  // 1. PROTECTION DES ROUTES PRIVÉES
-  // ==========================================
+  // 1. Routes publiques (pas besoin d'être connecté)
+  const isPublicRoute = 
+    pathname.startsWith('/api/auth/login') ||
+    pathname.startsWith('/api/auth/register') ||
+    pathname.startsWith('/api/auth/forgot-password') ||
+    pathname.startsWith('/api/auth/reset-password') ||
+    pathname.startsWith('/api/public/') ||
+    pathname.startsWith('/api/health')
+
+  if (isPublicRoute) {
+    return NextResponse.next()
+  }
+
+  // 2. Protection des routes privées
   const isAdminRoute = pathname.startsWith('/api/admin')
   const isStudentRoute = pathname.startsWith('/api/student')
 
@@ -18,18 +29,12 @@ export function middleware(request: NextRequest) {
     )
   }
 
-  // ==========================================
-  // 2. EN-TÊTES DE SÉCURITÉ (OWASP)
-  // ==========================================
+  // 3. En-têtes de sécurité
   const response = NextResponse.next()
-  
-  // Anti-XSS (Force le navigateur à respecter le Content-Type)
   response.headers.set('X-Content-Type-Options', 'nosniff')
-  // Anti-Clickjacking (Empêche l'intégration dans une iframe)
-  response.headers.set('X-Frame-Options', 'DENY')
-  // Protection XSS basique pour les anciens navigateurs
-  response.headers.set('X-XSS-Protection', '1; mode=block')
-  // Force HTTPS (HSTS) - À activer en production
+  response.headers.set('X-Frame-Options', 'DENY')       // <-- Correction ici
+  response.headers.set('X-XSS-Protection', '1; mode=block') // <-- Correction ici
+  
   if (process.env.NODE_ENV === 'production') {
     response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   }
@@ -37,7 +42,6 @@ export function middleware(request: NextRequest) {
   return response
 }
 
-// On applique ce middleware uniquement aux routes API (pas aux pages statiques)
 export const config = {
   matcher: '/api/:path*',
 }
