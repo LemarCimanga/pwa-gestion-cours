@@ -10,10 +10,8 @@ import crypto from 'crypto'
 
 export async function POST(req: Request) {
   try {
-    // 1. Récupération de l'IP pour le Rate Limiting
     const ip = req.headers.get('x-forwarded-for') || 'unknown-ip'
     
-    // 2. Vérification du Rate Limit (5 tentatives max)
     const rateLimit = checkRateLimit(ip, 5, 15 * 60 * 1000)
     if (!rateLimit.allowed) {
       return NextResponse.json(
@@ -22,7 +20,6 @@ export async function POST(req: Request) {
       )
     }
 
-    // 3. Validation des données
     const body = await req.json()
     const validation = loginSchema.safeParse(body)
     
@@ -33,19 +30,40 @@ export async function POST(req: Request) {
       )
     }
 
-    const { email, password, isStudent } = validation.data
+    const { email, password } = validation.data
     let userId = ''
     let userRole: 'PROF' | 'STAFF' | 'STUDENT' = 'STUDENT'
+    let mustChangePassword = false
 
-    // 4. Authentification
-    if (isStudent) {
-      // --- CONNEXION ÉTUDIANT ---
+    // 1. On cherche d'abord dans les Admins (PROF / STAFF)
+    const admin = await prisma.adminUser.findUnique({ where: { email } })
+    
+    if (admin) {
+      if (!admin.isActive) {
+        return NextResponse.json({ error: 'Compte désactivé.' }, { status: 401 })
+      }
+      
+      const isValid = await verifyPassword(password, admin.passwordHash)
+      if (!isValid) {
+        return NextResponse.json({ error: 'Identifiants invalides.' }, { status: 401 })
+      }
+
+      userId = admin.id
+      userRole = admin.role
+      mustChangePassword = false
+
+      await prisma.adminUser.update({
+        where: { id: admin.id },
+        data: { lastLoginAt: new Date() }
+      })
+    } 
+    // 2. Si on ne trouve pas dans les Admins, on cherche dans les Étudiants
+    else {
       const inscription = await prisma.inscription.findFirst({
         where: {
           etudiant: { email },
-          statut: 'VALIDEE' // L'étudiant doit être approuvé
-        },
-        include: { etudiant: true }
+          statut: 'VALIDEE'
+        }
       })
 
       if (!inscription || !inscription.passwordHash) {
@@ -59,63 +77,36 @@ export async function POST(req: Request) {
 
       userId = inscription.id
       userRole = 'STUDENT'
+      mustChangePassword = inscription.mustChangePassword
 
-      // Mise à jour de la dernière connexion
       await prisma.inscription.update({
         where: { id: inscription.id },
         data: { lastLoginAt: new Date() }
       })
-
-    } else {
-      // --- CONNEXION ADMIN (PROF / STAFF) ---
-      const user = await prisma.adminUser.findUnique({ where: { email } })
-      
-      if (!user || !user.isActive) {
-        return NextResponse.json({ error: 'Identifiants invalides ou compte désactivé.' }, { status: 401 })
-      }
-
-      const isValid = await verifyPassword(password, user.passwordHash)
-      if (!isValid) {
-        return NextResponse.json({ error: 'Identifiants invalides.' }, { status: 401 })
-      }
-
-      userId = user.id
-      userRole = user.role
-
-      // Mise à jour de la dernière connexion
-      await prisma.adminUser.update({
-        where: { id: user.id },
-        data: { lastLoginAt: new Date() }
-      })
     }
 
-    // 5. Création de la session (Tokens)
+    // 3. Génération des tokens
     const accessToken = signAccessToken({ id: userId, role: userRole })
-    
-    // Le Refresh Token est stocké en base pour permettre la révocation
-    const rawRefreshToken = crypto.randomBytes(40).toString('hex')
-    const hashedRefreshToken = crypto.createHash('sha256').update(rawRefreshToken).digest('hex')
-    
-    // On signe aussi le refresh token JWT pour la validation
     const signedRefreshToken = signRefreshToken({ id: userId })
 
-    // Enregistrement en base
+    // 4. Enregistrement du Refresh Token en base
+    const rawRefreshToken = crypto.randomBytes(40).toString('hex')
+    const hashedRefreshToken = crypto.createHash('sha256').update(rawRefreshToken).digest('hex')
+
     await prisma.refreshToken.create({
       data: {
         tokenHash: hashedRefreshToken,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 jours
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         adminUserId: userRole !== 'STUDENT' ? userId : null,
         inscriptionId: userRole === 'STUDENT' ? userId : null,
       }
     })
 
-    // 6. Configuration des cookies
+    // 5. Configuration des cookies
     await setAuthCookies(accessToken, signedRefreshToken)
-
-    // 7. Réinitialisation du Rate Limit en cas de succès
     resetRateLimit(ip)
 
-    // 8. Audit log
+    // 6. Audit log
     if (userRole !== 'STUDENT') {
       await logAction({
         adminUserId: userId,
@@ -129,8 +120,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ 
       success: true, 
       role: userRole,
-      // Si l'étudiant doit changer son mot de passe, on le signale au front-end
-      mustChangePassword: userRole === 'STUDENT' ? (await prisma.inscription.findUnique({ where: { id: userId } }))?.mustChangePassword : false
+      mustChangePassword
     })
 
   } catch (error) {
